@@ -7,6 +7,25 @@ import pygame
 import animation
 
 pygame.init()
+pygame.mixer.init()
+
+def load_sound(name, vol=1.0):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    try:
+        s = pygame.mixer.Sound(path)
+        s.set_volume(vol)
+        return s
+    except (pygame.error, FileNotFoundError):
+        return None
+def play(s):
+    if s:
+        s.play()
+
+pick_snd = load_sound("pick.wav", 0.5)
+place_snd = load_sound("place.wav", 0.7)
+lava_snd = load_sound("lava.wav", 0.3)
+lose_snd = load_sound("lose.wav", 0.8)
+
 screen = pygame.display.set_mode((400, 400))
 clock = pygame.time.Clock()
 running = True
@@ -42,10 +61,10 @@ HEIGHT = TRAY_Y + 170
 screen = pygame.display.set_mode((WIDTH,  HEIGHT))
 board = [[0] * GRID for _ in range(GRID)]
 pieces = [random.choice(SHAPES) for _ in range(3)]
-RISE_EVERY = 5
-LAVA_START = -3
+lava_height = 0.0
+lava_progress = 0.0
+lava_interval = random.choice([4, 5])
 turns = 0
-lava_level = LAVA_START
 game_over = False
 dragging = None
 mouse_x, mouse_y = 0, 0
@@ -67,14 +86,14 @@ game_over = False
 banner_timer = 0
 tray_x = [20, 150, 300]
 slides = [animation.Animation(150, 0, 0.4 + i * 0.2) for i in range(3)]
-effects = [animation.popeffect(0, 0, CELL, color) for color in COLORS]                                                                                                                                                                                                                                                                         
+effects = []                                                                                                                                                                                                                                                                     
 
 dragging = None
 offset_x = 0
 offset_y = 0
 
 def playable_rows():
-    return max(0, GRID - max(0, lava_level))
+    return max(0, GRID - int(lava_height))
 def can_place(shape, row, col):
     pr = playable_rows()
     for r in range(len(shape)):
@@ -83,35 +102,28 @@ def can_place(shape, row, col):
                 rr, cc = row + r, col + c
                 if rr < 0 or rr >= pr or cc < 0 or cc >= GRID or board[rr][cc] == 1:
                     return False
-            return True
+    return True
 def draw_board():
-    pr = playable_rows()
-    for row in range(GRID):
-        for col in range(GRID):
-            if row >= pr:
-                color = (230, 70, 20)
-            elif board[row][col] == 1:
-                color = (0, 200, 255)
-            else:
-                color = (40, 40, 50)
-            pygame.draw.rect(screen, color, (col * CELL + 1, row * CELL + 1, CELL - 2, CELL - 2))
-    if lava_level <= 0:
-        h = int((lava_level - LAVA_START) / - LAVA_START * 24)
-        if h > 0:
-            pygame.draw.rect(screen, (255, 140, 30), (0, GRID * CELL - h, GRID * CELL, h))
-    best_text = font.render(f"Best: {best}", True, (255, 220, 100))
-    screen.blit(best_text, (WIDTH - MARGIN - best_text.get_width(), 15))
-    panel = (BOARD_X - 8, BOARD_Y - 8, GRID * CELL +16, GRID * CELL + 16)
-    pygame.draw.rect(screen, (20, 20, 40), panel, border_radius=12)
+    pygame.draw.rect(screen, (20, 20, 40),
+                    (BOARD_X - 8, BOARD_Y - 8, GRID * CELL + 16, GRID * CELL + 16),
+                    border_radius=12)
     for row in range(GRID):
         for col in range(GRID):
             color = (0, 200, 255) if board[row][col] == 1 else (40, 40, 50)
-            pygame.draw.rect(screen, color, (BOARD_X + col * CELL + 1, BOARD_Y + row * CELL + 1, CELL -2, CELL -2))
+            pygame.draw.rect(screen, color, (BOARD_X + col * CELL + 1,
+                                             BOARD_Y + row * CELL + 1, CELL - 2, CELL - 2))
+            h = min(GRID * CELL, int(lava_height * CELL))
+            if h > 0:
+                y  = BOARD_Y + GRID * CELL - h
+                lava = pygame.Surface((GRID * CELL, h), pygame.SRCALPHA)
+                lava.fill((255, 100, 0, 170))
+                screen.blit(lava, (BOARD_X, y))
+                pygame.draw.line(screen, (255, 210, 0), (BOARD_X, y),
+                                 (BOARD_X + GRID * CELL, y), 4)
+def draw_hud():
+    best_text = font.render(f"Best: {best}", True, (255, 220, 100))
+    screen.blit(best_text, (WIDTH - MARGIN - best_text.get_width(), 15))
     screen.blit(font.render(f"Score: {score}", True, (255, 255, 255)), (MARGIN, 15))
-    if lava_level <= 0:
-        h = int((lava_level - LAVA_START) / -LAVA_START * 24)
-        if h > 0:
-            pygame.draw.rect(screen, (255, 140, 30), (0, GRID * CELL - h, GRID * CELL, h))
 def draw_piece(shape, x, y, color, size=CELL):
     for r in range(len(shape)):
         for c in range(len(shape[r])):
@@ -127,7 +139,6 @@ def make_pieces():
         h = len(shape) * TRAY_CELL
         x = i * slot_w + (slot_w - w) // 2
         y = TRAY_Y + (150 - h) // 2
-        slot_w = GRID * CELL // 3
         result.append({
             "shape": shape,
             "color": PIECE_COLORS[k % len(PIECE_COLORS)],
@@ -142,15 +153,6 @@ pieces = make_pieces()
 def slot_rect(i):
     w = GRID * CELL // 3
     return pygame.Rect(i * w, TRAY_Y + 40, w, 110)
-def can__place(shape, row, col):
-    pr = playable_rows()
-    for r in  range(len(shape)):
-        for c in range(len(shape[r])):
-            if shape[r][c] == 1:
-                rr, cc = row + r, col + c
-            if rr < 0 or rr >= pr or cc < 0 or cc >= GRID or board[rr][cc] == 1:
-                return False
-    return True  
 def any_move_possible():
     for p in pieces:
         if p is None:
@@ -170,8 +172,9 @@ def place_piece(shape, row, col):
             if shape[r][c] == 1:
                 board[row + r][col + c] = 1
 def clear_lines():
+    pr = playable_rows()
     full_rows = [r for r in range(GRID) if all(board[r][c] == 1 for c in range(GRID))]
-    full_cols = [c for c in range(GRID) if all(board[r][c] == 1 for r in range(GRID))]
+    full_cols = [c for c in range(GRID) if pr > 0 and all(board[r][c] == 1 for r in range(pr))]
     for r in full_rows:
         for c in range(GRID):
             board[r][c] = 0
@@ -200,6 +203,9 @@ def draw_tray():
         w = len(shape[0]) * TRAY_CELL
         h = len(shape) * TRAY_CELL
         draw_piece(shape, rect.x + (rect.w - w) // 2, rect.y + (rect.h - h) // 2, COLORS[SHAPES.index(shape)], TRAY_CELL)
+        
+if lava_snd:
+    lava_snd.play(-1)
 
 running = True
 while running:
@@ -214,6 +220,14 @@ while running:
             score = 0
             dragging = None
             game_over = False
+            lava_height = 0.0
+            lava_progress = 0.0
+            lava_interval = random.choice([4, 5])
+            turns = 0
+            if lava_snd:
+                lava_snd.stop()
+                lava_snd.play(-1)
+                lava_snd.set_volume(0.15)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_over:
             slot_w = WIDTH // 3
             for i in range(3):
@@ -222,6 +236,7 @@ while running:
                     continue
                 if i * slot_w <= event.pos[0] < (i + 1) * slot_w and event.pos[1] >= TRAY_Y - 20:
                     dragging = i
+                    play(pick_snd)
                     offset_x = len(p["shape"][0]) * CELL // 2
                     offset_y = len(p["shape"]) * CELL // 2
                     p["x"] = event.pos[0] - offset_x
@@ -236,6 +251,7 @@ while running:
             col = round((p["x"] - BOARD_X) / CELL)
             if can_place(p["shape"], row,col):
                place_piece(p["shape"], row, col)
+               play(place_snd)
                gained = sum(sum(line) for line in p["shape"]) * BLOCK_POINTS
                cleared = clear_lines()
                gained += cleared * LINE_POINTS
@@ -248,17 +264,32 @@ while running:
                    with open(SAVE_FILE, "w") as f:
                        f.write(str(best))
                pieces[dragging] = None
+               speed = min(4.0, 1.1 + 0.1 * (turns // 10))
+               turns += 1
+               lava_progress += speed
+               while lava_progress >= lava_interval:
+                   lava_progress -= lava_interval
+                   lava_height += 1
+                   lava_interval = random.choice([4, 5])
+               if cleared:
+                   lava_height = max(0.0, lava_height - 0.5 * cleared)
+                   if board_empty():
+                       lava_height = 0.0
+                       lava_progress = 0.0
+               for r in range(playable_rows(), GRID):
+                   board[r] = [0] * GRID
+               if lava_snd:
+                   lava_snd.set_volume(min(0.5, 0.15 + lava_height * 0.04))
                if all(q is None for q in pieces):
                    pieces = make_pieces()
-               if not any(q is not None and fits_anywhere(q["shape"]) for q in pieces):     
+               if not any(q is not None and fits_anywhere(q["shape"]) for q in pieces):
                    game_over = True
+                   play(lose_snd)
+                   if lava_snd:
+                       lava_snd.stop()
             else:
                 p["x"], p["y"] = p["home_x"], p["home_y"]
             dragging = None
-        for i, p in enumerate(pieces):
-            if p is None:
-                continue
-            draw_piece(p["shape"], p["x"], p["y"] + slides[i].value, p["color"])
     for s in slides:
          s.update(dt)
     for fx in effects:
@@ -268,6 +299,7 @@ while running:
     draw_board()
     for fx in effects:
         fx.draw(screen) 
+    draw_hud()
     if dragging is not None:
         gp = pieces[dragging]
         grow = round((gp["y"] - BOARD_Y) / CELL)
@@ -292,24 +324,7 @@ while running:
     if game_over:
         text = font.render("GAME OVER - press R", True, (255, 255, 255))
         screen.blit(text, ((GRID * CELL - text.get_width()) // 2, 180))
-    background = pygame.Surface((WIDTH, HEIGHT))
-    for y in range(HEIGHT):
-            t = y / HEIGHT
-            pygame.draw.line(background, (int(25 + 45 * t), int(15 + 20 * t), int(60 + 70 * t)), (0, y), (WIDTH, y))
     
-            bubble_colors = [(255, 100, 180), (100, 220, 255), (255, 220, 100),  (140, 255, 160)]
-            bubbles = [[random.randint(0, WIDTH), random.randint(0, HEIGHT), random.randint(9, 30), random.uniform(10, 30)] for _ in range(14)]
-    
-    def draw_background():
-            screen.blit(background, (0, 0))
-            layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            for i, b in enumerate(bubbles):
-                b[1] -= b[3] / 60
-                if b[1] < -b[2]:
-                    b[1] = HEIGHT + b[2]
-                    b[0] = random.randint(0, WIDTH)
-                pygame.draw.circle(layer, bubble_colors[i % 4] + (50,), (int(b[0])), (int(b[1])), b[2])
-            screen.blit(layer, (0, 0))
         
     pygame.display.flip()
 
