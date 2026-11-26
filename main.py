@@ -2,6 +2,8 @@ import random
 
 import os
 
+import math
+
 import pygame
 
 import animation
@@ -45,23 +47,25 @@ SHAPES = [
     [[1, 1, 1], [0, 1, 0]],
     [[0, 1], [1, 1]], [[1, 1], [0, 1]], [[1, 1], [1, 0]]
     ]
-PIECE_COLORS = [(0, 200, 255), (0, 255, 0), (255, 60, 60), (255, 200, 0),
-                (180, 80, 255), (255, 120, 0), (255, 80, 160), (80, 255, 200)]
+PIECE_COLORS = [(255, 120, 0), (255, 200, 0), (255, 60, 30), (255, 150, 40),
+                (220, 40, 40), (255, 90, 0), (255, 230, 90), (200, 60, 0)]
 
 GRID = 8
 tray_y = GRID * CELL + 30
 
 WIDTH_ = GRID * CELL
+top = 100
 MARGIN = 40
 BOARD_X = MARGIN
-BOARD_Y = 60
+BOARD_Y = 60 + top
 WIDTH = GRID * CELL + MARGIN * 2
 TRAY_Y = BOARD_Y + GRID * CELL + 30
-HEIGHT = TRAY_Y + 170
+HEIGHT = TRAY_Y + 170 + top
 screen = pygame.display.set_mode((WIDTH,  HEIGHT))
 board = [[0] * GRID for _ in range(GRID)]
 pieces = [random.choice(SHAPES) for _ in range(3)]
 lava_height = 0.0
+heat_smooth = 0.0
 lava_progress = 0.0
 lava_interval = random.choice([4, 5])
 turns = 0
@@ -80,6 +84,24 @@ try:
 except (FileNotFoundError, ValueError):
     best = 0
 font = pygame.font.SysFont(None, 36)
+title_font = pygame.font.SysFont("impact", 64)
+def make_title(text):
+    core = title_font.render(text, True, (255, 210, 50))
+    edge = title_font.render(text, True, (150, 29, 0))
+    glow = title_font.render(text, True, (255, 90, 0))
+    size = (core.get_width() + 80, core.get_height() + 80)
+    glow_layer = pygame.Surface(size, pygame.SRCALPHA)
+    text_layer = pygame.Surface(size, pygame.SRCALPHA)
+    cx, cy = size[0] // 2, size[1] // 2
+    for size, alpha in [(14, 25), (9, 50), (5, 90)]:
+        glow.set_alpha(alpha)
+        for dx in range(-size, size + 1, 3):
+            for dy in range(-size, size + 1, 3):
+                glow_layer.blit(glow, glow.get_rect(center=(cx + dx, cy + dy)))
+    text_layer.blit(edge, edge.get_rect(center=(cx + 3, cy + 4)))
+    text_layer.blit(core, core.get_rect(center=(cx, cy)))
+    return glow_layer, text_layer
+glow_layer, text_layer = make_title("LAVA BLAST")
 BLOCK_COLOR = (0, 200, 255)
 COLORS = [(0, 200, 255), (0, 255,0), (255, 0, 0)]
 game_over = False
@@ -104,26 +126,32 @@ def can_place(shape, row, col):
                     return False
     return True
 def draw_board():
-    pygame.draw.rect(screen, (20, 20, 40),
-                    (BOARD_X - 8, BOARD_Y - 8, GRID * CELL + 16, GRID * CELL + 16),
-                    border_radius=12)
+    pygame.draw.rect(screen, (110, 28, 0),
+                     (BOARD_X - 8, BOARD_Y - 8, GRID * CELL + 16, GRID * CELL + 16),
+                     border_radius=12)
     for row in range(GRID):
         for col in range(GRID):
-            color = (0, 200, 255) if board[row][col] == 1 else (40, 40, 50)
-            pygame.draw.rect(screen, color, (BOARD_X + col * CELL + 1,
-                                             BOARD_Y + row * CELL + 1, CELL - 2, CELL - 2))
-            h = min(GRID * CELL, int(lava_height * CELL))
-            if h > 0:
-                y  = BOARD_Y + GRID * CELL - h
-                lava = pygame.Surface((GRID * CELL, h), pygame.SRCALPHA)
-                lava.fill((255, 100, 0, 170))
-                screen.blit(lava, (BOARD_X, y))
-                pygame.draw.line(screen, (255, 210, 0), (BOARD_X, y),
-                                 (BOARD_X + GRID * CELL, y), 4)
+            x = BOARD_X + col * CELL + 1
+            y = BOARD_Y + row * CELL + 1
+            if board[row][col] == 1:
+                pygame.draw.rect(screen, (255, 110, 0), (x, y, CELL - 2, CELL - 2))
+                pygame.draw.rect(screen, (255, 175, 30), (x + 8, y + 8, CELL - 18, CELL - 18))
+            else:
+                pygame.draw.rect(screen, (45, 18, 18), (x, y, CELL - 2, CELL - 2))
+    h = min(GRID * CELL, int(lava_height * CELL))
+    if h > 0:
+        t = pygame.time.get_ticks() / 400
+        w = GRID * CELL
+        top = [(x, 4 + math.sin(x / 25 + t) * 3) for x in range(0, w + 1, 5)]
+        lava = pygame.Surface((w, h + 8), pygame.SRCALPHA)
+        pygame.draw.polygon(lava, (255, 100, 0, 170),  top + [(w, h + 8), (0, h + 8)])
+        pygame.draw.lines(lava, (255, 210, 0), False, top, 4)
+        screen.blit(lava, (BOARD_X, BOARD_Y + w - h - 4))
+    
 def draw_hud():
     best_text = font.render(f"Best: {best}", True, (255, 220, 100))
-    screen.blit(best_text, (WIDTH - MARGIN - best_text.get_width(), 15))
-    screen.blit(font.render(f"Score: {score}", True, (255, 255, 255)), (MARGIN, 15))
+    screen.blit(best_text, (WIDTH - MARGIN - best_text.get_width(), 15 + top))
+    screen.blit(font.render(f"Score: {score}", True, (255, 255, 255)), (MARGIN, 15 + top))
 def draw_piece(shape, x, y, color, size=CELL):
     for r in range(len(shape)):
         for c in range(len(shape[r])):
@@ -256,7 +284,7 @@ while running:
                cleared = clear_lines()
                gained += cleared * LINE_POINTS
                if cleared and not any(any(row) for row in board):
-                gained *= 3
+                gained += 3
                 banner_timer = 90
                score += gained
                if score > best:
@@ -295,7 +323,15 @@ while running:
     for fx in effects:
             fx.update(dt)
     effects = [fx for fx in effects if not fx.finished]  
-    screen.fill((30, 30, 30))
+    heat = min(1.0, lava_height / 6)
+    heat_smooth += (heat - heat_smooth) * min(1, dt * 3)
+    screen.fill((int(25 + 70 * heat_smooth), int(5 + 12 * heat_smooth), 5))
+
+    pulse = (math.sin(pygame.time.get_ticks() / 350) + 1) / 2
+    glow_layer.set_alpha(int(100 + 155 * pulse))
+    title_rect = glow_layer.get_rect(center=(WIDTH // 2, top // 2 + 5))
+    screen.blit(glow_layer, title_rect)
+    screen.blit(text_layer, title_rect)
     draw_board()
     for fx in effects:
         fx.draw(screen) 
@@ -306,7 +342,7 @@ while running:
         gcol = round((gp["x"] - BOARD_X) / CELL)
         if can_place(gp["shape"], grow, gcol):
             ghost = pygame.Surface((CELL - 2, CELL - 2), pygame.SRCALPHA)
-            ghost.fill((120, 255, 120, 110))
+            ghost.fill((255, 230, 120, 110))
             for r in range(len(gp["shape"])):
                 for c in range(len(gp["shape"][r])):
                     if gp["shape"][r][c] == 1:
@@ -322,8 +358,11 @@ while running:
         t = font.render("PERFECT CLEAR 3x", True, (255, 230, 0))
         screen.blit(t, t.get_rect(center=(WIDTH // 2, BOARD_Y + GRID * CELL // 2)))
     if game_over:
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 150))
+        screen.blit(shade, (0, 0))
         text = font.render("GAME OVER - press R", True, (255, 255, 255))
-        screen.blit(text, ((GRID * CELL - text.get_width()) // 2, 180))
+        screen.blit(text, text.get_rect(center=(WIDTH // 2, BOARD_Y + GRID * CELL // 2)))
     
         
     pygame.display.flip()
