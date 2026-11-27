@@ -4,6 +4,8 @@ import os
 
 import math
 
+import copy
+
 import pygame
 
 import animation
@@ -30,6 +32,10 @@ lose_snd = load_sound("lose.wav", 0.8)
 explosion_snd = load_sound("explosion.mp3", 0.8)
 freeze_snd = load_sound("freeze.mp3", 1.0)
 perfect_snd = load_sound("perfect.mp3", 0.8)
+purple_snd = load_sound("purple.mp3", 0.8)
+rewind_snd = load_sound("rewind.mp3", 1.0)
+snap_snd = load_sound("snap", 0.8)
+over9000_snd = load_sound("over9000", 0.7)
 
 screen = pygame.display.set_mode((400, 400))
 clock = pygame.time.Clock()
@@ -149,7 +155,7 @@ def draw_board():
                 pygame.draw.rect(screen, (45, 18, 18), (x, y, CELL - 2, CELL - 2))
     h = min(GRID * CELL, int(lava_height * CELL))
     if h > 0:
-        t = pygame.time.get_ticks() / 400
+        t = anim_time * 2.5
         w = GRID * CELL
         top = [(x, 4 + math.sin(x / 25 + t) * 3) for x in range(0, w + 1, 5)]
         lava = pygame.Surface((w, h + 8), pygame.SRCALPHA)
@@ -164,9 +170,9 @@ def draw_board():
         screen.blit(lava, (BOARD_X, BOARD_Y + w - h - 4))
 
 def draw_hud():
-    best_text = font.render(f"Best: {best}", True, (255, 220, 100))
+    best_text = font.render(f"Best: {shown_best}", True, (255, 220, 100))
     screen.blit(best_text, (WIDTH - MARGIN - best_text.get_width(), 15 + top))
-    screen.blit(font.render(f"Score: {score}", True, (255, 255, 255)), (MARGIN, 15 + top))
+    screen.blit(font.render(f"Score: {shown_score}", True, (255, 255, 255)), (MARGIN, 15 + top))
 def draw_piece(shape, x, y, color, size=CELL):
     for r in range(len(shape)):
         for c in range(len(shape[r])):
@@ -221,6 +227,26 @@ def explode(row, col):
     explosions.append([BOARD_X + col * CELL + CELL // 2,
                        BOARD_Y + row * CELL + CELL // 2,
                        EXPLOSION_TIME])
+def hollow_purple(row, col):
+    play(purple_snd)
+    play(explosion_snd)
+    for i in range(GRID):
+        board[row][i] = 0
+        board[i][col] = 0
+    purple_fx.append([row, col, 0.7])
+def thanos_snap():
+    plau(snap_sound)
+    global snap_text_timer
+    play(explosion_snd)
+    filled = [(r, c) for r in range(GRID) for c in range(GRID) if board[r][c] == 1]
+    for r, c in random.sample(filled, len(filled) // 2):
+        board[r][c] = 0
+        for _ in range(6):
+            dust.append([BOARD_X + c * CELL + random.randint(0, CELL),
+            BOARD_Y + r * CELL + random.randint(0, CELL),
+            random.uniform(20, 80), random.uniform(-70, -10),
+            random.uniform(0.6, 1.2)])
+    snap_text_timer = 1.5
 def place_piece(shape, row, col):
     for r in range(len(shape)):
         for c in range(len(shape[r])):
@@ -266,10 +292,29 @@ power_rect = pygame.Rect(WIDTH // 2 - 60, TRAY_Y + 165, 120, 40)
 power_font = pygame.font.SysFont(None, 26)
 explosions = []
 EXPLOSION_TIME = 0.5
+anim_time = 0.0
+shown_score = 0
+shown_best = best
+POWERUPS = ["freeze", "bomb", "rewind", "snap", "purple"]
+purple_active = False
+last_state = None
+rewind_timer = 0.0
+REWIND_TIME = 1.0
+over9000_shown = False
+over9000_timer = 0.0
+snap_text_timer = 0.0
+dust = []
+purple_fx = []
+over_font = pygame.font.SysFont("impact", 46)
 
 running = True
 while running:
     dt = clock.tick(60) / 1000
+    if freeze_turns == 0 or game_over:
+        shown_score = score
+        shown_best = best
+    if freeze_turns == 0:
+        anim_time += dt
     for event in pygame.event.get():
         
         if event.type == pygame.QUIT:
@@ -287,10 +332,23 @@ while running:
             power_up = None
             freeze_turns = 0
             bomb_active = False
+            timestop_timer = 0.0
+            rounds = 1
+            purple_active = False
+            last_state = None
+            rewind_timer = 0.0
+            over9000_shown = False
+            over9000_timer = 0.0
+            snap_text_timer = 0.0
+            dust.clear()
+            purple_fx.clear()
+            explosions.clear()
             if lava_snd:
                 lava_snd.stop()
                 lava_snd.play(-1)
                 lava_snd.set_volume(0.15)
+        elif event.type == pygame.MOUSEBUTTONDOWN and bomb_active and (event.button == 3 or (event.button == 1 and power_rect.collidepoint(event.pos))):
+            bomb_active = False
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and bomb_active:
             row = (event.pos[1] - BOARD_Y) // CELL
             col = (event.pos[0] - BOARD_X) // CELL
@@ -298,6 +356,15 @@ while running:
                 explode(row, col)
                 bomb_active = False
                 power_up = None
+        elif event.type == pygame.MOUSEBUTTONDOWN and purple_active and (event.button == 3 or (event.button == 1 and power_rect.collidepoint(event.pos))):
+                    purple_active = False
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and purple_active:
+                    row = (event.pos[1] - BOARD_Y) // CELL
+                    col = (event.pos[0] - BOARD_X) // CELL
+                    if 0 <= row < GRID and 0 <= col < GRID:
+                        hollow_purple(row, col)
+                        purple_active = False
+                        power_up = None
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and power_rect.collidepoint(event.pos) and power_up:
             if power_up == "freeze":
                 freeze_turns = 5
@@ -306,6 +373,31 @@ while running:
                 power_up = None
             elif power_up == "bomb":
                 bomb_active = True
+            elif power_up == "purple":
+                purple_active = True
+            elif power_up == "snap":
+                thanos_snap()
+                power_up = None
+            elif power_up == "rewind" and last_state:
+                play(rewind_snd)
+                board = last_state["board"]
+                pieces = last_state["pieces"]
+                score = last_state["score"]
+                lava_height = last_state["lava_height"]
+                lava_progress = last_state["lava_progress"]
+                lava_interval = last_state["lava_interval"]
+                turns = last_state["turns"]
+                freeze_turns = last_state["freeze_turns"]
+                for q in pieces:
+                    if q:
+                        q["x"], q["y"] = q["home_x"], q["home_y"]
+                    if game_over and lava_snd:
+                        lava_snd.play(-1)
+                    game_over = False
+                    rewind_timer = REWIND_TIME
+                    last_state = None
+                    power_up = None
+
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_over:
             slot_w = WIDTH // 3
             for i in range(3):
@@ -328,6 +420,10 @@ while running:
             row = round((p["y"] - BOARD_Y) / CELL)
             col = round((p["x"] - BOARD_X) / CELL)
             if can_place(p["shape"], row,col):
+               last_state = {"board": copy.deepcopy(board), "pieces": copy.deepcopy(pieces),
+                                         "score": score, "lava_height": lava_height,
+                                         "lava_progress": lava_progress, "lava_interval": lava_interval,
+                                         "turns": turns, "freeze_turns": freeze_turns}
                place_piece(p["shape"], row, col)
                play(place_snd)
                gained = sum(sum(line) for line in p["shape"]) * BLOCK_POINTS
@@ -338,6 +434,10 @@ while running:
                 banner_timer = 90
                 play(perfect_snd)
                score += gained
+               if score > 9000 and not over9000_shown:
+                   over9000_shown = True
+                   over9000_timer = 2.5
+                   play(over9000_snd)
                if score > best:
                    best = score
                    with open(SAVE_FILE, "w") as f:
@@ -345,10 +445,57 @@ while running:
                pieces[dragging] = None
                if all (p is None for p in pieces):
                    rounds += 1
-               if rounds % 3 == 0 and power_up is None:
-                   power_up = random.choice(["freeze", "bomb"])
+               if rounds % 5 == 0 and power_up is None:
+                   power_up = random.choice(POWERUPS)
                speed = min(4.0, 1.1 + 0.1 * (turns // 10))
                turns += 1
+               for d in dust[:]:
+                    d[0] += d[2] * dt
+                    d[1] += d[3] * dt
+                    d[4] -= dt
+                    if d[4] <= 0:
+                        dust.remove(d)
+                        continue
+                    s = pygame.Surface((6, 6), pygame.SRCALPHA)
+                    s.fill((170, 160, 160, int(255 * min(1, d[4]))))
+                    screen.blit(s, (d[0], d[1]))
+               for pf in purple_fx[:]:
+                   pf[2] -= dt
+                   if pf[2] <= 0:
+                       purple_fx.remove(pf)
+                       continue
+                   a = int(255 * pf[2] / 0.7)
+                   beam = pygame.Surface((GRID * CELL, CELL), pygame.SRCALPHA)
+                   beam.fill((170, 60, 255, a))
+                   screen.blit(beam, (BOARD_X + pf[1] * CELL, BOARD_Y))
+               if snap_text_timer > 0:
+                   snap_text_timer -= dt
+                   t = font.render("PERFECTLY BALANCED", True, (200, 160, 255))
+                   t.set_alpha(int(255 * min(1, snap_text_timer)))
+                   screen.blit(t, t.get_rect(center=(WIDTH // 2, BOARD_Y + GRID * CELL // 2)))
+               if rewind_timer > 0:
+                   rewind_timer -= dt
+                   rt = 1 - max(rewind_timer, 0) / REWIND_TIME
+                   cx, cy = WIDTH // 2, BOARD_Y + GRID * CELL // 2
+                   for k in range(3):
+                       rad = int((1 - rt) * 250) + k * 45
+                       if rad > 0:
+                           pygame.draw.circle(screen, (255, 170, 0), (cx, cy), rad, 4)
+                   t = font.render("REWIND", True, (255, 200, 60))
+                   screen.blit(t, t.get_rect(center=(cx, cy)))
+               if over9000_timer > 0:
+                over9000_timer -= dt
+                sh = int(6 * min(1, over9000_timer))
+                ox, oy = random.randint(-sh, sh), random.randint(-sh, sh)
+                al = int(255 * min(1, over9000_timer))
+                back = over_font.render("IT'S OVER 9000!", True, (200, 30, 0))
+                front = over_font.render("IT'S OVER 9000!", True, (255, 230, 60))
+                back.set_alpha(al)
+                front.set_alpha(al)
+                pos = (WIDTH // 2 + ox, BOARD_Y + 120 + oy)
+                screen.blit(back, back.get_rect(center=(pos[0] + 3, pos[1] + 3)))
+                screen.blit(front, front.get_rect(center=pos))
+
                if freeze_turns > 0:
                    freeze_turns -= 1
                else:
@@ -386,7 +533,7 @@ while running:
     heat_smooth += (heat - heat_smooth) * min(1, dt * 3)
     screen.fill((int(25 + 70 * heat_smooth), int(5 + 12 * heat_smooth), 5))
 
-    pulse = (math.sin(pygame.time.get_ticks() / 350) + 1) / 2
+    pulse = (math.sin(anim_time * 2.857) + 1) / 2
     glow_layer.set_alpha(int(100 + 155 * pulse))
     title_rect = glow_layer.get_rect(center=(WIDTH // 2, top // 2 + 5))
     screen.blit(glow_layer, title_rect)
@@ -428,6 +575,12 @@ while running:
         color, label = (80, 160, 255), "FREEZE"
     elif power_up == "bomb":
         color, label = (255, 140, 0), "BOMB"
+    elif power_up == "rewind":
+        color, label = (255, 170, 0), "REWIND"
+    elif power_up == "snap":
+        color, label = (130, 80, 200), "SNAP"
+    elif power_up == "purple":
+        color, label = (150, 40, 255), "PURPLE"
     else:
         color,label = (70, 70, 70), "NO POWER"
     pygame.draw.rect(screen, color, power_rect, border_radius=8)
