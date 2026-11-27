@@ -27,6 +27,9 @@ pick_snd = load_sound("pick.wav", 0.5)
 place_snd = load_sound("place.wav", 0.7)
 lava_snd = load_sound("lava.wav", 0.3)
 lose_snd = load_sound("lose.wav", 0.8)
+explosion_snd = load_sound("explosion.mp3", 0.8)
+freeze_snd = load_sound("freeze.mp3", 1.0)
+perfect_snd = load_sound("perfect.mp3", 0.8)
 
 screen = pygame.display.set_mode((400, 400))
 clock = pygame.time.Clock()
@@ -73,6 +76,12 @@ game_over = False
 dragging = None
 mouse_x, mouse_y = 0, 0
 font = pygame.font.SysFont(None, 26)
+freeze_turns = 0
+power_up = None
+bomb_active = False
+rounds = 0
+timestop_timer = 0.0
+TIMESTOP_TIME = 1.0
 TRAY_CELL = 26
 BLOCK_POINTS = 10
 LINE_POINTS = 100
@@ -144,10 +153,16 @@ def draw_board():
         w = GRID * CELL
         top = [(x, 4 + math.sin(x / 25 + t) * 3) for x in range(0, w + 1, 5)]
         lava = pygame.Surface((w, h + 8), pygame.SRCALPHA)
-        pygame.draw.polygon(lava, (255, 100, 0, 170),  top + [(w, h + 8), (0, h + 8)])
-        pygame.draw.lines(lava, (255, 210, 0), False, top, 4)
+        if freeze_turns > 0:
+            body_color = (80, 190, 255, 170)
+            edge_color = (200, 245, 255)
+        else:
+            body_color = (255, 100, 0, 170)
+            edge_color = (255, 210, 0)
+        pygame.draw.polygon(lava, body_color, top + [(w, h + 8), (0, h + 8 )])
+        pygame.draw.lines(lava, edge_color, False, top, 4)
         screen.blit(lava, (BOARD_X, BOARD_Y + w - h - 4))
-    
+
 def draw_hud():
     best_text = font.render(f"Best: {best}", True, (255, 220, 100))
     screen.blit(best_text, (WIDTH - MARGIN - best_text.get_width(), 15 + top))
@@ -178,6 +193,9 @@ def make_pieces():
     return result
 
 pieces = make_pieces()
+rounds += 1
+if rounds % 2 == 0 and power_up is None:
+    power_up = random.choice(["freeze", "bomb"])
 def slot_rect(i):
     w = GRID * CELL // 3
     return pygame.Rect(i * w, TRAY_Y + 40, w, 110)
@@ -194,6 +212,15 @@ def board_empty():
     return all(board[r][c] == 0 for r in range(playable_rows()) for c in range(GRID))
 def tray_rect(i):
     return pygame.Rect(i * (WIDTH_ // 3), GRID * CELL + 40, WIDTH_ // 3, 110)
+def explode(row, col):
+    play(explosion_snd)
+    for r in range(row - 1, row + 2):
+        for c in range(col - 1, col + 2):
+            if 0 <= r < len(board) and 0 <= c < len(board[0]):
+                board[r][c] = 0
+    explosions.append([BOARD_X + col * CELL + CELL // 2,
+                       BOARD_Y + row * CELL + CELL // 2,
+                       EXPLOSION_TIME])
 def place_piece(shape, row, col):
     for r in range(len(shape)):
         for c in range(len(shape[r])):
@@ -235,6 +262,11 @@ def draw_tray():
 if lava_snd:
     lava_snd.play(-1)
 
+power_rect = pygame.Rect(WIDTH // 2 - 60, TRAY_Y + 165, 120, 40)
+power_font = pygame.font.SysFont(None, 26)
+explosions = []
+EXPLOSION_TIME = 0.5
+
 running = True
 while running:
     dt = clock.tick(60) / 1000
@@ -252,10 +284,28 @@ while running:
             lava_progress = 0.0
             lava_interval = random.choice([4, 5])
             turns = 0
+            power_up = None
+            freeze_turns = 0
+            bomb_active = False
             if lava_snd:
                 lava_snd.stop()
                 lava_snd.play(-1)
                 lava_snd.set_volume(0.15)
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and bomb_active:
+            row = (event.pos[1] - BOARD_Y) // CELL
+            col = (event.pos[0] - BOARD_X) // CELL
+            if 0 <= row < len(board) and 0 <= col < len(board[0]):
+                explode(row, col)
+                bomb_active = False
+                power_up = None
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and power_rect.collidepoint(event.pos) and power_up:
+            if power_up == "freeze":
+                freeze_turns = 5
+                play(freeze_snd)
+                timestop_timer = TIMESTOP_TIME
+                power_up = None
+            elif power_up == "bomb":
+                bomb_active = True
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not game_over:
             slot_w = WIDTH // 3
             for i in range(3):
@@ -286,19 +336,28 @@ while running:
                if cleared and not any(any(row) for row in board):
                 gained += 3
                 banner_timer = 90
+                play(perfect_snd)
                score += gained
                if score > best:
                    best = score
                    with open(SAVE_FILE, "w") as f:
                        f.write(str(best))
                pieces[dragging] = None
+               if all (p is None for p in pieces):
+                   rounds += 1
+               if rounds % 3 == 0 and power_up is None:
+                   power_up = random.choice(["freeze", "bomb"])
                speed = min(4.0, 1.1 + 0.1 * (turns // 10))
                turns += 1
-               lava_progress += speed
-               while lava_progress >= lava_interval:
-                   lava_progress -= lava_interval
-                   lava_height += 1
-                   lava_interval = random.choice([4, 5])
+               if freeze_turns > 0:
+                   freeze_turns -= 1
+               else:
+                   speed = min(4.0, 1.1 + 0.1 * (turns // 10))
+                   lava_progress += speed
+                   while lava_progress >= lava_interval:
+                       lava_progress -= lava_interval
+                       lava_height += 1
+                       lava_interval = random.choice([4, 5])
                if cleared:
                    lava_height = max(0.0, lava_height - 0.5 * cleared)
                    if board_empty():
@@ -363,7 +422,49 @@ while running:
         screen.blit(shade, (0, 0))
         text = font.render("GAME OVER - press R", True, (255, 255, 255))
         screen.blit(text, text.get_rect(center=(WIDTH // 2, BOARD_Y + GRID * CELL // 2)))
-    
+    if bomb_active:
+        color, label = (255, 80, 0), "CLICK BOARD"
+    elif power_up == "freeze":
+        color, label = (80, 160, 255), "FREEZE"
+    elif power_up == "bomb":
+        color, label = (255, 140, 0), "BOMB"
+    else:
+        color,label = (70, 70, 70), "NO POWER"
+    pygame.draw.rect(screen, color, power_rect, border_radius=8)
+    text = power_font.render(label, True, (255, 255, 255))
+    screen.blit(text, text.get_rect(center=power_rect.center))
+    for ex in explosions[:]:
+        ex[2] -= dt
+        if ex[2] <= 0:
+            explosions.remove(ex)
+            continue
+        t = 1 - ex[2] / EXPLOSION_TIME
+        radius = int(CELL * 1.8 * t) + 5
+        pygame.draw.circle(screen, (255, 230, 120), (ex[0], ex[1]), radius, max(1, int(8 * (1 - t))))
+        pygame.draw.circle(screen, (255, 120, 0), (ex[0], ex[1]), int(radius * 0.7), max(1, int(5 * (1 - t))))
+    if freeze_turns > 0:
+        gray = pygame.transform.grayscale(screen)
+        gray.set_alpha(140)
+        screen.blit(gray, (0, 0))
+    if timestop_timer > 0:
+        timestop_timer -= dt
+        ts = 1 - max(timestop_timer, 0) / TIMESTOP_TIME
+        cx, cy = WIDTH // 2, BOARD_Y + GRID * CELL // 2
+        radius = int(min(1, ts / 0.4) * math.hypot(WIDTH, HEIGHT))
+        inv =  pygame.Surface((WIDTH, HEIGHT))
+        inv.fill((255, 255, 255))
+        inv.blit(screen, (0, 0), special_flags=pygame.BLEND_RGB_SUB)
+        inv = inv.convert_alpha()
+        mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.circle(mask, (255, 255, 255, 255), (cx, cy), radius)
+        inv.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        inv.set_alpha(int(255 * min(1, (1 - ts) / 0.4)))
+        screen.blit(inv, (0, 0))
+        if ts < 0.4:
+            pygame.draw.circle(screen, (210, 245, 255), (cx, cy), radius, 5)
+        if ts < 0.9:
+            label = font.render("TIME STOP", True, (255, 255, 255))
+            screen.blit(label, label.get_rect(center=(cx, cy - 30)))
         
     pygame.display.flip()
 
